@@ -88,7 +88,10 @@ bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t 
     return false;
   }
   _queryFQDN[0] = (uint8_t)n;
-  memcpy(&_queryFQDN[1], domain, n);
+  // Copy in domain characters as lowercase
+  for (int i = 0; i < n; ++i) {
+    _queryFQDN[1+i] = tolower(domain[i]);
+  }
   // Values for 5 (length), "local":
   uint8_t local[] = { 0x05, 0x6C, 0x6F, 0x63, 0x61, 0x6C };
   memcpy(&_queryFQDN[1+n], local, 6);
