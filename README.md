@@ -1,7 +1,7 @@
 CC3000 Multicast DNS
 ====================
 
-Version 1.0
+Version 1.1
 
 This is a simple implementation of multicast DNS query support for an Arduino
 and CC3000 WiFI chip.  Only support for resolving address queries is currently

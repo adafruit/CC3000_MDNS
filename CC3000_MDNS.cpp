@@ -1,7 +1,7 @@
 /*
 
 CC3000 Multicast DNS 
-Version 1.0
+Version 1.1
 Copyright (c) 2013 Tony DiCola (tony@tonydicola.com)
 
 License (MIT license):
@@ -31,6 +31,7 @@ License (MIT license):
 
 #include "CC3000_MDNS.h"
 
+#define READ_BUFFER_SIZE 20
 #define HEADER_SIZE 12
 #define QDCOUNT_OFFSET 4
 #define A_RECORD_SIZE 14
@@ -38,32 +39,19 @@ License (MIT license):
 #define TTL_OFFSET 4
 #define IP_OFFSET 10
 
-// TODO: Put these in flash, or refactor away into better state handling.
-uint8_t MDNSResponder::_queryHeader[] = { 
-  0x00, 0x00, // ID = 0
-  0x00, 0x00, // Flags = query
-  0x00, 0x00, // Question count = ignored
-  0x00, 0x00, // Answer count = ignored
-  0x00, 0x00, // Name server records = ignored
-  0x00, 0x00  // Additional records = ignored
-};
-
 int MDNSResponder::_mdnsSocket = -1;
 
 MDNSResponder::MDNSResponder()
-  : _queryFQDN(NULL)
-  , _queryFQDNLen(0)
-  , _current(NULL)
-  , _currentLen(0)
-  , _index(0)
-  , _FQDNcount(0)
+  : _expected(NULL)
+  , _expectedLen(0)
   , _response(NULL)
   , _responseLen(0)
+  , _index(0)
 { }
 
 MDNSResponder::~MDNSResponder() {
-  if (_queryFQDN != NULL) {
-    free(_queryFQDN);
+  if (_expected != NULL) {
+    free(_expected);
   }
   if (_response != NULL) {
     free(_response);
@@ -79,23 +67,27 @@ bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t 
     // Can only handle domains that are 255 chars in length.
     return false;
   }
-  _queryFQDNLen = 8 + n;
-  if (_queryFQDN != NULL) {
-    free(_queryFQDN);
+  _expectedLen = 12 + n;
+  if (_expected != NULL) {
+    free(_expected);
   }
-  _queryFQDN = (uint8_t*) malloc(_queryFQDNLen);
-  if (_queryFQDN == NULL) {
+  _expected = (uint8_t*) malloc(_expectedLen);
+  if (_expected == NULL) {
     return false;
   }
-  _queryFQDN[0] = (uint8_t)n;
+  _expected[0] = (uint8_t)n;
   // Copy in domain characters as lowercase
   for (int i = 0; i < n; ++i) {
-    _queryFQDN[1+i] = tolower(domain[i]);
+    _expected[1+i] = tolower(domain[i]);
   }
-  // Values for 5 (length), "local":
-  uint8_t local[] = { 0x05, 0x6C, 0x6F, 0x63, 0x61, 0x6C };
-  memcpy(&_queryFQDN[1+n], local, 6);
-  _queryFQDN[7+n] = 0;
+  // Values for: 
+  //  - 5 (length) 
+  //  - "local"
+  //  - 0x00 (end of domain)
+  //  - 0x00 0x01 (A record query)
+  //  - 0x00 0x01 (Class IN)
+  uint8_t local[] = { 0x05, 0x6C, 0x6F, 0x63, 0x61, 0x6C, 0x00, 0x00, 0x01, 0x00, 0x01 };
+  memcpy(&_expected[1+n], local, 11);
 
   // Construct DNS query response
   // TODO: Move these to flash or just construct in code.
@@ -125,7 +117,8 @@ bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t 
                             0x40, 0x00, 0x00, 0x00     // Bitmap value = Only first bit (A record/IPV4) is set
   }; 
   // Allocate memory for response.
-  _responseLen = HEADER_SIZE + _queryFQDNLen + A_RECORD_SIZE + NSEC_RECORD_SIZE;
+  int queryFQDNLen = _expectedLen - 4;
+  _responseLen = HEADER_SIZE + queryFQDNLen + A_RECORD_SIZE + NSEC_RECORD_SIZE;
   if (_response != NULL) {
     free(_response);
   }
@@ -135,8 +128,8 @@ bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t 
   }
   // Copy data into response.
   memcpy(_response, respHeader, HEADER_SIZE);
-  memcpy(_response + HEADER_SIZE, _queryFQDN, _queryFQDNLen);
-  uint8_t* records = _response + HEADER_SIZE + _queryFQDNLen;
+  memcpy(_response + HEADER_SIZE, _expected, queryFQDNLen);
+  uint8_t* records = _response + HEADER_SIZE + queryFQDNLen;
   memcpy(records, aRecord, A_RECORD_SIZE);
   memcpy(records + A_RECORD_SIZE, nsecRecord, NSEC_RECORD_SIZE);
   // Add TTL to records.
@@ -174,9 +167,6 @@ bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t 
     _mdnsSocket = soc;
   }
 
-  // Start in a state of parsing the DNS query header.
-  changeState(_queryHeader);
-
   return true;
 }
 
@@ -194,67 +184,33 @@ void MDNSResponder::update() {
     return;
   }
   // Read available data.
-  uint8_t buffer[20];
+  uint8_t buffer[READ_BUFFER_SIZE];
   int n = recv(_mdnsSocket, &buffer, sizeof(buffer), 0);
   if (n < 1) {
     // Error getting data.
     return;
   }
-  // Compare incoming data to expected data from current state.
+  // Look for domain name in request and respond with canned response if found.
   for (int i = 0; i < n; ++i) {
-    uint8_t ch = buffer[i];
-    // If we're processing an FQDN character, make the comparison case insensitive.
-    if (_current == _queryFQDN && _FQDNcount > 0) {
-      ch = tolower(ch);
-    }
-    // Check character matches expected, or in the case of parsing the question counts
-    // ignore it completely (this is done because MDNS queries on different platforms
-    // sometimes ask for different record types).
-    if (ch == _current[_index] ||
-        (_current == _queryHeader && _index >= QDCOUNT_OFFSET)) 
+    uint8_t ch = tolower(buffer[i]);
+    // Check character matches expected.
+    if (ch == _expected[_index]) 
     {
-      // Update FQDN char count when processing FQDN characters.
-      if (_current == _queryFQDN) {
-        if (_FQDNcount == 0) {
-          // Handle the next characters as case insensitive FQDN characters.
-          _FQDNcount = ch;
-        }
-        else {
-          _FQDNcount--;
-        }
-      }
-      // Update state when the end of the current one has been reached.
       _index++;
-      if (_index >= _currentLen) {
-        // Switch to next state
-        if (_current == _queryHeader) {
-          changeState(_queryFQDN);
-        }
-        else if (_current == _queryFQDN) {
-          sendResponse();
-          changeState(_queryHeader);
-        }
+      // Check if domain name was found and send a response.
+      if (_index >= _expectedLen) {
+        // Send response to multicast address.
+        send(_mdnsSocket, _response, _responseLen, 0);
+        _index = 0;
       }
+    }
+    else if (ch == _expected[0]) {
+      // Found a character that doesn't match, but does match the start of the domain.
+      _index = 1;
     }
     else {
-      // Reset to start looking from the start again
-      changeState(_queryHeader);
+      // Found a character that doesn't match the expected character or start of domain.
+      _index = 0;
     }
   }
-}
-
-void MDNSResponder::changeState(uint8_t* state) {
-  _current = state;
-  if (state == _queryFQDN) {
-    _currentLen = _queryFQDNLen;
-  }
-  else if (state == _queryHeader) {
-    _currentLen = HEADER_SIZE;
-  }
-  _index = 0;
-  _FQDNcount = 0;
-}
-
-void MDNSResponder::sendResponse() {
-  send(_mdnsSocket, _response, _responseLen, 0);
 }

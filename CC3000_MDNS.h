@@ -1,7 +1,7 @@
 /*
 
 CC3000 Multicast DNS 
-Version 1.0
+Version 1.1
 Copyright (c) 2013 Tony DiCola (tony@tonydicola.com)
 
 This is a simple implementation of multicast DNS query support for an Arduino
@@ -56,21 +56,15 @@ public:
 private:
   // Expected query values
   static uint8_t _queryHeader[];
-  uint8_t* _queryFQDN;
-  int _queryFQDNLen;
+  uint8_t* _expected;
+  int _expectedLen;
   // Current parsing state
-  uint8_t* _current;
-  int _currentLen;
   int _index;
-  uint8_t _FQDNcount;
   // Response data
   uint8_t* _response;
   int _responseLen;
   // Socket for MDNS communication
   static int _mdnsSocket;
-
-  void changeState(uint8_t* state);
-  void sendResponse();
 };
 
 #endif
