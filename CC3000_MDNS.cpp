@@ -60,6 +60,12 @@ MDNSResponder::~MDNSResponder() {
 
 bool MDNSResponder::begin(const char* domain, Adafruit_CC3000& cc3000, uint32_t ttlSeconds)
 { 
+  // Call gethostbyname on localhost as suggested by TI to deal with firmware v1.13 issue:
+  //  http://e2e.ti.com/support/wireless_connectivity/f/851/t/342177.aspx
+  // See issue #1 on github repository for more details.
+  uint32_t output;
+  int result = gethostbyname("localhost", 9, &output);
+
   // Construct DNS request/response fully qualified domain name of form:
   // <domain length>, <domain characters>, 5, "local"
   size_t n = strlen(domain);
