@@ -1,0 +1,19 @@
+{
+  "name": "CC3000_MDNS",
+  "keywords": "mdns, dns, network",
+  "description": "Simple multicast DNS name resolution library for Adafruit's CC3000",
+  "repository":
+  {
+    "type": "git",
+    "url": "https://github.com/adafruit/CC3000_MDNS.git"
+  },
+  "dependencies":
+  [
+    {
+      "name": "Adafruit-CC3000",
+      "frameworks": "arduino"
+    }
+  ],  
+  "frameworks": "arduino",
+  "platforms": "atmelavr"
+}
