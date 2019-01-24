@@ -1,3 +1,5 @@
+This example is deprecated, we no longer make/support CC3000!
+
 CC3000 Multicast DNS
 ====================
 
